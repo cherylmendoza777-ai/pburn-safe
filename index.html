@@ -33,14 +33,14 @@
   <section class="card"><h2>Wallet</h2><div id="wallet">Looking for a wallet…</div></section>
   <section id="records"></section>
   <section class="card" id="action" hidden><h2>Sending</h2><div id="log" class="mono"></div></section>
-  <p class="sub mono">built 2026-10-15 18:51 UTC, 1 record(s)</p>
+  <p class="sub mono">built 2026-10-15 21:03 UTC, 2 record(s)</p>
 </main>
 <script>
 // The Safe's transactions, as proposed (safe-txs/<chain>/ in the project). Everything else -
 // owners, threshold, nonce, approvals, and each transaction's hash - is read from the chain
 // through the wallet, and a transaction whose hash the Safe does not reproduce is refused.
 const CHAIN = 369;
-const RECORDS = [{"safe":"0xB7475158fa86d25661A0fF41e0D7a990cE08b3D1","label":"signer-check","nonce":0,"safeTxHash":"0xbc6df2343887675774c09b3cdb45527a86f945cd5e6e5482a114b0fa1c5e5ea6","to":"0xB7475158fa86d25661A0fF41e0D7a990cE08b3D1","value":"0","data":"0x","operation":0,"note":"nothing - a no-op that proves the owners can sign"}];
+const RECORDS = [{"safe":"0xB7475158fa86d25661A0fF41e0D7a990cE08b3D1","label":"signer-check","nonce":0,"safeTxHash":"0xbc6df2343887675774c09b3cdb45527a86f945cd5e6e5482a114b0fa1c5e5ea6","to":"0xB7475158fa86d25661A0fF41e0D7a990cE08b3D1","value":"0","data":"0x","operation":0,"note":"nothing - a no-op that proves the owners can sign"},{"safe":"0xB7475158fa86d25661A0fF41e0D7a990cE08b3D1","label":"accept-ownership","nonce":1,"safeTxHash":"0xf70814ba9d42e44605c2c0f6d6de5a827f4b22498813197a15307ce26e509e4f","to":"0xF052e1Eb8D3c0c73Cd7fC24f22372941036eAb74","value":"0","data":"0x01d5062a0000000000000000000000009e6b4883b08181bb42561546aba07519f65af337000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000003f480000000000000000000000000000000000000000000000000000000000000000479ba509700000000000000000000000000000000000000000000000000000000","operation":0,"note":"through the timelock 0xF052e1Eb8D3c0c73Cd7fC24f22372941036eAb74: schedule a call to 0x9e6b4883b08181bB42561546abA07519f65aF337 (0x79ba5097), operation 0xeffa9f380f6797f7d58593c1766c299dde8a928cb462288e2754d29e0b768a1c"}];
 const CHAIN_HEX = "0x" + CHAIN.toString(16);
 const ZERO = "0x0000000000000000000000000000000000000000";
 const SEL = { owners: "0xa0e67e2b", threshold: "0xe75235b8", nonce: "0xaffed0e0", approved: "0x7d832974", txHash: "0xd8d11f78", exec: "0x6a761202", approve: "0xd4d9bdcd" };
