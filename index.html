@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'">
+<meta name="robots" content="noindex">
+<title>Safe owner page</title>
+<style>
+  :root { --bg: #f7f7f5; --card: #ffffff; --ink: #1d1d1b; --mute: #6b6b66; --line: #e2e1dc; --ok: #1f7a3a; --warn: #9a5b00; --bad: #b3261e; --accent: #2b59c3; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #161615; --card: #20201e; --ink: #ecebe6; --mute: #9d9c95; --line: #34332f; --ok: #5cc27a; --warn: #e3a33b; --bad: #f2867d; --accent: #8aa8f0; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 20px 16px 64px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  h2 { font-size: 16px; margin: 0 0 8px; }
+  .sub { color: var(--mute); margin: 0 0 18px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin: 0 0 14px; }
+  .mono { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 13px; overflow-wrap: anywhere; }
+  .row { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+  .k { color: var(--mute); min-width: 92px; }
+  .ok { color: var(--ok); } .warn { color: var(--warn); } .bad { color: var(--bad); } .mute { color: var(--mute); }
+  button { font: inherit; padding: 10px 18px; border-radius: 8px; border: 1px solid var(--accent); background: var(--accent); color: #fff; cursor: pointer; margin: 8px 8px 0 0; }
+  button.ghost { background: transparent; color: var(--accent); }
+  button:disabled { opacity: .45; cursor: default; }
+  ul { margin: 6px 0 0; padding-left: 18px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Safe owner page</h1>
+  <p class="sub">For the owners of one Safe on PulseChain: approve or execute its transactions from a wallet's own browser. The page holds no key and sends nothing itself. Your wallet shows each transaction, and you sign it, or don't.</p>
+  <section class="card"><h2>Wallet</h2><div id="wallet">Looking for a wallet…</div></section>
+  <section id="records"></section>
+  <section class="card" id="action" hidden><h2>Sending</h2><div id="log" class="mono"></div></section>
+  <p class="sub mono">built 2026-10-15 18:51 UTC, 1 record(s)</p>
+</main>
+<script>
+// The Safe's transactions, as proposed (safe-txs/<chain>/ in the project). Everything else -
+// owners, threshold, nonce, approvals, and each transaction's hash - is read from the chain
+// through the wallet, and a transaction whose hash the Safe does not reproduce is refused.
+const CHAIN = 369;
+const RECORDS = [{"safe":"0xB7475158fa86d25661A0fF41e0D7a990cE08b3D1","label":"signer-check","nonce":0,"safeTxHash":"0xbc6df2343887675774c09b3cdb45527a86f945cd5e6e5482a114b0fa1c5e5ea6","to":"0xB7475158fa86d25661A0fF41e0D7a990cE08b3D1","value":"0","data":"0x","operation":0,"note":"nothing - a no-op that proves the owners can sign"}];
+const CHAIN_HEX = "0x" + CHAIN.toString(16);
+const ZERO = "0x0000000000000000000000000000000000000000";
+const SEL = { owners: "0xa0e67e2b", threshold: "0xe75235b8", nonce: "0xaffed0e0", approved: "0x7d832974", txHash: "0xd8d11f78", exec: "0x6a761202", approve: "0xd4d9bdcd" };
+
+const strip = (h) => h.replace(/^0x/, "").toLowerCase();
+const word = (n) => BigInt(n).toString(16).padStart(64, "0");
+const addr = (a) => strip(a).padStart(64, "0");
+const tail = (h) => { const b = strip(h); return word(b.length / 2) + b + "0".repeat((64 - (b.length % 64)) % 64); };
+const same = (a, b) => !!a && !!b && a.toLowerCase() === b.toLowerCase();
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+// getTransactionHash(to, value, data, operation, 0, 0, 0, 0x0, 0x0, nonce)
+const encHash = (r) => SEL.txHash + [addr(r.to), word(r.value), word(320), word(r.operation), word(0), word(0), word(0), addr(ZERO), addr(ZERO), word(r.nonce)].join("") + tail(r.data);
+// execTransaction(to, value, data, operation, 0, 0, 0, 0x0, 0x0, signatures)
+function encExec(r, sigs) {
+  const d = tail(r.data);
+  return SEL.exec + [addr(r.to), word(r.value), word(320), word(r.operation), word(0), word(0), word(0), addr(ZERO), addr(ZERO), word(320 + d.length / 2)].join("") + d + tail(sigs);
+}
+// Pre-validated signatures (v = 1), ascending by owner: approved on chain, or the executor itself.
+function signatures(signers) {
+  return "0x" + signers.slice().sort((x, y) => (BigInt(x) < BigInt(y) ? -1 : 1)).map((o) => addr(o) + word(0) + "01").join("");
+}
+
+let eth = null, account = null, chainId = null, view = [], busy = false;
+const call = (to, data) => eth.request({ method: "eth_call", params: [{ to, data }, "latest"] });
+
+// A wallet's browser may inject after the page loads: wait for it. Wallet events re-render the
+// page; they never reload it.
+function findProvider() {
+  if (window.ethereum) return Promise.resolve(window.ethereum);
+  return new Promise((resolve) => {
+    const t = setTimeout(() => resolve(window.ethereum || null), 3000);
+    window.addEventListener("ethereum#initialized", () => { clearTimeout(t); resolve(window.ethereum); }, { once: true });
+  });
+}
+
+async function readAll() {
+  view = [];
+  const safes = {};
+  for (const r of RECORDS) {
+    if (!safes[r.safe]) {
+      const o = await call(r.safe, SEL.owners);
+      const n = Number(BigInt("0x" + o.slice(2 + 64, 2 + 128)));
+      const owners = [];
+      for (let i = 0; i < n; i++) owners.push("0x" + o.slice(2 + 128 + i * 64 + 24, 2 + 128 + (i + 1) * 64));
+      safes[r.safe] = { owners, threshold: Number(BigInt(await call(r.safe, SEL.threshold))), nonce: Number(BigInt(await call(r.safe, SEL.nonce))) };
+    }
+    const s = safes[r.safe];
+    const state = s.nonce > r.nonce ? "executed" : s.nonce < r.nonce ? "waiting" : "pending";
+    const v = { r, s, state, approvals: [], hashOk: null };
+    if (state === "pending") {
+      v.hashOk = same(await call(r.safe, encHash(r)), r.safeTxHash);
+      for (const owner of s.owners) v.approvals.push({ owner, approved: BigInt(await call(r.safe, SEL.approved + addr(owner) + strip(r.safeTxHash))) !== 0n });
+    }
+    view.push(v);
+  }
+}
+
+function renderWallet() {
+  const b = document.getElementById("wallet");
+  if (!eth) { b.innerHTML = '<span class="bad">No wallet here.</span> Open this page inside your wallet app\'s browser (in MetaMask: the Browser tab).'; return; }
+  if (!account) { b.innerHTML = 'Not connected.<br><button id="connect">Connect wallet</button>'; document.getElementById("connect").onclick = connect; return; }
+  const onChain = chainId === CHAIN_HEX;
+  const owner = view.some((v) => v.s.owners.some((o) => same(o, account)));
+  b.innerHTML =
+    '<div class="row"><span class="k">account</span><span class="mono">' + esc(account) + "</span></div>" +
+    '<div class="row"><span class="k">network</span>' + (onChain ? '<span class="ok">PulseChain (' + CHAIN + ")</span>" : '<span class="bad">chain ' + parseInt(chainId, 16) + ", not PulseChain</span> <button id=\"switch\" class=\"ghost\">Switch to PulseChain</button>") + "</div>" +
+    (onChain ? '<div class="row"><span class="k">Safe owner</span>' + (owner ? '<span class="ok">yes</span>' : '<span class="warn">no - pick the owner account in your wallet</span>') + "</div>" : "");
+  const s = document.getElementById("switch");
+  if (s) s.onclick = () => eth.request({ method: "wallet_switchEthereumChain", params: [{ chainId: CHAIN_HEX }] }).catch((e) => alert(e.message));
+}
+
+function renderRecords() {
+  const el = document.getElementById("records");
+  if (!account || chainId !== CHAIN_HEX) { el.innerHTML = ""; return; }
+  let h = "";
+  const pending = view.filter((v) => v.state === "pending");
+  if (!pending.length) h += '<section class="card">No Safe transaction is waiting.</section>';
+  for (const v of pending) {
+    const { r, s } = v;
+    const n = v.approvals.filter((x) => x.approved).length;
+    const me = v.approvals.find((x) => same(x.owner, account));
+    const ready = n >= s.threshold || (n === s.threshold - 1 && me && !me.approved);
+    h += '<section class="card"><h2>' + esc(r.label) + " - Safe nonce " + r.nonce + "</h2>" +
+      '<div class="row"><span class="k">Safe</span><span class="mono">' + esc(r.safe) + "</span></div>" +
+      '<div class="row"><span class="k">transaction</span><span class="mono">' + esc(r.safeTxHash) + "</span></div>" +
+      '<div class="row"><span class="k">calls</span><span class="mono">' + esc(r.to) + (r.data === "0x" ? " (no data - a no-op)" : " with " + (r.data.length - 2) / 2 + " bytes") + "</span></div>" +
+      (r.note ? '<div class="row"><span class="k">does</span><span>' + esc(r.note) + "</span></div>" : "") +
+      '<div class="row"><span class="k">approvals</span><span>' + n + " of " + s.threshold + "</span></div><ul>" +
+      v.approvals.map((x) => '<li class="mono">' + (x.approved ? '<span class="ok">approved</span> ' : '<span class="mute">not yet</span> ') + esc(x.owner) + (same(x.owner, account) ? " <b>(you)</b>" : "") + "</li>").join("") + "</ul>";
+    if (!v.hashOk) h += '<p class="bad">The Safe does not reproduce this transaction\'s hash. Do not sign it.</p>';
+    else {
+      if (me && !me.approved && n < s.threshold) h += '<button data-i="' + view.indexOf(v) + '" data-action="approve">Approve</button>';
+      h += ready ? '<button data-i="' + view.indexOf(v) + '" data-action="exec">Execute</button>' : '<p class="warn">Not ready to execute: ' + n + " of " + s.threshold + " approvals.</p>";
+    }
+    h += "</section>";
+  }
+  const done = view.filter((v) => v.state !== "pending");
+  if (done.length) h += '<section class="card"><h2>Done or waiting</h2><ul>' + done.map((v) => '<li class="mono">' + esc(v.r.label) + ", nonce " + v.r.nonce + ": " + (v.state === "executed" ? '<span class="ok">executed</span>' : "waits for an earlier nonce") + "</li>").join("") + "</ul></section>";
+  el.innerHTML = h;
+  el.querySelectorAll("button[data-action]").forEach((b) => (b.onclick = () => act(view[Number(b.dataset.i)], b.dataset.action)));
+  el.querySelectorAll("button").forEach((b) => (b.disabled = busy));
+}
+
+async function refresh() {
+  renderWallet();
+  if (account && chainId === CHAIN_HEX) {
+    try { await readAll(); } catch (e) { document.getElementById("records").innerHTML = '<section class="card bad">Could not read the Safe: ' + esc(e.message) + "</section>"; return; }
+  }
+  renderWallet();
+  renderRecords();
+}
+
+async function connect() {
+  try {
+    account = (await eth.request({ method: "eth_requestAccounts" }))[0] || null;
+    chainId = await eth.request({ method: "eth_chainId" });
+  } catch (e) { alert(e.message); }
+  await refresh();
+}
+
+function log(line, cls) {
+  document.getElementById("action").hidden = false;
+  const d = document.createElement("div");
+  if (cls) d.className = cls;
+  d.textContent = line;
+  document.getElementById("log").appendChild(d);
+}
+
+async function act(v, action) {
+  if (busy) return;
+  busy = true; renderRecords();
+  document.getElementById("log").textContent = "";
+  try {
+    await readAll();
+    v = view.find((x) => x.r.safeTxHash === v.r.safeTxHash);
+    if (!v || v.state !== "pending" || !v.hashOk) throw new Error("this transaction is no longer waiting, or its hash does not match");
+    let data;
+    if (action === "approve") data = SEL.approve + strip(v.r.safeTxHash);
+    else {
+      const signers = v.approvals.filter((x) => x.approved).map((x) => x.owner.toLowerCase());
+      if (v.s.owners.some((o) => same(o, account)) && !signers.includes(account.toLowerCase())) signers.push(account.toLowerCase());
+      if (signers.length < v.s.threshold) throw new Error(signers.length + " of " + v.s.threshold + " signatures: more owners must approve first");
+      const chosen = signers.sort((x, y) => (BigInt(x) < BigInt(y) ? -1 : 1)).slice(0, v.s.threshold);
+      data = encExec(v.r, signatures(chosen));
+    }
+    const tx = { from: account, to: v.r.safe, value: "0x0", data };
+    log("to     " + tx.to + "  (check your device shows this address)");
+    log("value  0");
+    log("call   " + (action === "approve" ? "approveHash(" + v.r.safeTxHash + ")" : "execTransaction - " + v.r.label + ", nonce " + v.r.nonce));
+    log("data   " + data.slice(0, 10) + "… (" + (data.length - 2) / 2 + " bytes)");
+    log("Simulating…");
+    const sim = await eth.request({ method: "eth_call", params: [tx, "latest"] });
+    if (action === "exec" && !/1$/.test(sim)) throw new Error("the simulation did not return success: " + sim);
+    log("Simulation passed. Confirm in your wallet, then sign on your device.", "ok");
+    const hash = await eth.request({ method: "eth_sendTransaction", params: [tx] });
+    log("sent   " + hash, "ok");
+    log("Waiting for it to be mined…");
+    for (let i = 0; i < 150; i++) {
+      await new Promise((r) => setTimeout(r, 4000));
+      const rc = await eth.request({ method: "eth_getTransactionReceipt", params: [hash] }).catch(() => null);
+      if (rc) {
+        log("MINED in block " + parseInt(rc.blockNumber, 16) + (rc.status === "0x1" ? " - succeeded." : " - but it FAILED."), rc.status === "0x1" ? "ok" : "bad");
+        log("hash   " + hash);
+        break;
+      }
+      if (i === 149) log("Not mined after 10 minutes - keep the hash above.", "warn");
+    }
+  } catch (e) {
+    log("Stopped: " + (e && e.message ? e.message : e), "bad");
+  }
+  busy = false;
+  await refresh();
+}
+
+(async () => {
+  eth = await findProvider();
+  if (eth) {
+    if (eth.on) {
+      eth.on("accountsChanged", (a) => { account = a[0] || null; refresh(); });
+      eth.on("chainChanged", (c) => { chainId = c; refresh(); });
+    }
+    try {
+      account = (await eth.request({ method: "eth_accounts" }))[0] || null;
+      chainId = await eth.request({ method: "eth_chainId" });
+    } catch {}
+  }
+  await refresh();
+})();
+</script>
+</body>
+</html>
